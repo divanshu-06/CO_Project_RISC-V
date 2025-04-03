@@ -174,3 +174,93 @@ def parse_j_type(parts, line_num, labels, pc):
     inst = instructions[opcode]
     imm_bin = to_binary(imm, 21)
     return imm_bin[0] + imm_bin[10:20] + imm_bin[9] + imm_bin[1:9] + rd + inst["opcode"]
+
+
+def parse_bonus_type(parts, line_num):
+    if len(parts) != 1:
+        print(f"Error at line {line_num}: {parts[0]} takes no operands")
+        sys.exit(1)
+    opcode = parts[0]
+    if opcode not in instructions:
+        print(f"Error at line {line_num}: Invalid instruction {opcode}")
+        sys.exit(1)
+    inst = instructions[opcode]
+    return "000000000000" + "00000" + inst["funct3"] + "00000" + inst["opcode"]
+
+def assemble(input_file, output_file):
+    with open(input_file, "r") as f:
+        lines = f.readlines()
+    labels = {}
+    instruction_lines = []
+    pc = 0  
+    for i, line in enumerate(lines, 1):
+        clean_line = line.strip()
+        if not clean_line:
+            continue
+        if ":" in clean_line:
+            parts = clean_line.split(":", 1)
+            label = parts[0].strip()
+            if not label[0].isalpha():
+                print(f"Error at line {i}: Label must start with a character")
+                sys.exit(1)
+            if label in labels:
+                print(f"Error at line {i}: Duplicate label '{label}'")
+                sys.exit(1)             
+            labels[label] = pc
+            clean_line = parts[1].strip()
+        if not clean_line:
+            continue           
+        instruction_lines.append((i, clean_line))
+        pc += 4  
+    binary_lines = []
+    pc = 0
+    has_terminator = False   
+    for line_num, line in instruction_lines:
+        parts = line.replace(",", " ").split()
+        opcode = parts[0]
+        if opcode in ["add", "sub", "slt", "srl", "or"]:
+            binary = parse_r_type(parts, line_num)
+        elif opcode in ["addi", "lw", "jalr"]:
+            binary = parse_i_type(parts, line_num)
+        elif opcode == "sw":
+            binary = parse_s_type(parts, line_num)
+        elif opcode in ["beq", "bne"]:
+            binary = parse_b_type(parts, line_num, labels, pc)
+            if opcode == "beq" and parts[1] == "zero" and parts[2] == "zero":
+                is_zero_offset = False
+                try:
+                    is_zero_offset = (int(parts[3]) == 0)
+                except ValueError:
+                    if parts[3] in labels and labels[parts[3]] == pc:
+                        is_zero_offset = True
+                        
+                if is_zero_offset:
+                    has_terminator = True
+        elif opcode == "jal":
+            binary = parse_j_type(parts, line_num, labels, pc)
+        elif opcode in ["rst", "halt"]:
+            binary = parse_bonus_type(parts, line_num)
+            if opcode == "halt":
+                has_terminator = True
+        else:
+            print(f"Error at line {line_num}: Invalid instruction {opcode}")
+            sys.exit(1)
+        binary_lines.append(binary)
+        pc += 4
+    if not has_terminator:
+        print("Error: Missing terminating instruction (beq zero,zero,0 or halt)")
+        sys.exit(1)
+    terminator_instructions = ["00000000000000000000000001100011", "000000000000000000010000001110011"]
+    if binary_lines[-1] not in terminator_instructions:
+        print("Error: Terminating instruction (beq zero,zero,0 or halt) must be last")
+        sys.exit(1)
+    with open(output_file, "w") as f:
+        for binary in binary_lines:
+            f.write(binary + "\n")
+    print(f"Successfully assembled. Output written to {output_file}")
+
+if __name__ == "_main_":
+    if len(sys.argv) != 3:
+        print("Usage: python assembler.py input.asm output.bin")
+        sys.exit(1)
+    assemble(sys.argv[1], sys.argv[2])
