@@ -164,3 +164,172 @@ def execute_s_type(instruction, registers, pc):
         memory[address] = val & 0xFFFFFFFF
         return pc + 4
     return pc + 4
+
+def execute_b_type(instruction, registers, pc):
+    rs1 = f"x{int(instruction['rs1'], 2)}"
+    rs2 = f"x{int(instruction['rs2'], 2)}"
+    imm = sign_extend(int(instruction["imm"], 2), 13)
+    operation = instruction["operation"]
+    val1 = registers[rs1] if rs1 != "x0" else 0
+    val2 = registers[rs2] if rs2 != "x0" else 0
+
+    if operation == "beq" and rs1 == "x0" and rs2 == "x0" and imm == 0:
+        return pc
+    if operation == "beq" and val1 == val2: 
+        return pc + (imm << 1)
+    elif operation == "bne" and val1 != val2: 
+        return pc + (imm)
+    return pc + 4
+
+def execute_j_type(instruction, registers, pc):
+    rd = f"x{int(instruction['rd'], 2)}"
+    imm = sign_extend(int(instruction["imm"], 2), 21)
+    if instruction["operation"] == "jal":
+        if rd != "x0": registers[rd] = pc + 4
+        return pc + (imm)
+    return pc + 4
+
+def execute_instruction(instruction, registers, pc):
+    if isinstance(instruction, str): return pc + 4
+
+    elif instruction["type"] == "R": return execute_r_type(instruction, registers, pc)
+    elif instruction["type"] == "I": return execute_i_type(instruction, registers, pc)
+    elif instruction["type"] == "S": return execute_s_type(instruction, registers, pc)
+    elif instruction["type"] == "B": return execute_b_type(instruction, registers, pc)
+    elif instruction["type"] == "J": return execute_j_type(instruction, registers, pc)
+    
+    elif instruction["opcode"] == "0000001":
+        return -1  # Halt execution
+
+    elif instruction["opcode"] == "0000111":
+        for reg in registers:
+            if reg != "x0":
+                registers[reg] = 0
+        return pc+4 
+    elif instruction["opcode"] == "0000000": return -1
+    else: return pc + 4
+
+def run_simulator(input_file, output_file, output_r_file):
+    global pc, registers, memory
+    pc = 0
+    registers = {f"x{i}": 0 for i in range(32)}
+    registers["x2"] = 380
+    
+    memory_trace = {
+    "0x00010000": 0,
+    "0x00010004": 0,
+    "0x00010008": 0,
+    "0x0001000C": 0,
+    "0x00010010": 0,
+    "0x00010014": 0,
+    "0x00010018": 0,
+    "0x0001001C": 0,
+    "0x00010020": 0,
+    "0x00010024": 0,
+    "0x00010028": 0,
+    "0x0001002C": 0,
+    "0x00010030": 0,
+    "0x00010034": 0,
+    "0x00010038": 0,
+    "0x0001003C": 0,
+    "0x00010040": 0,
+    "0x00010044": 0,
+    "0x00010048": 0,
+    "0x0001004C": 0,
+    "0x00010050": 0,
+    "0x00010054": 0,
+    "0x00010058": 0,
+    "0x0001005C": 0,
+    "0x00010060": 0,
+    "0x00010064": 0,
+    "0x00010068": 0,
+    "0x0001006C": 0,
+    "0x00010070": 0,
+    "0x00010074": 0,
+    "0x00010078": 0,
+    "0x0001007C": 0
+    }
+
+    memory = {} 
+    
+    instructions = read_from_file(input_file)
+    instruction_trace = []
+    r_formattrace = [] 
+    halt_encountered = False
+    
+    i = 0
+    while i < len(instructions):
+        if halt_encountered: 
+            break
+        
+        binary_str = instructions[i]
+        parsed_inst = parse_instruction(binary_str)
+        pc1 = pc
+        next_pc = execute_instruction(parsed_inst, registers, pc)
+        
+        reg_state = {reg: _32bit_twos_complement(val) for reg, val in registers.items()}
+        reg_state["PC"] = _32bit_twos_complement(next_pc)
+        instruction_trace.append((f"P{next_pc:02d}", binary_str, reg_state))
+        
+        r_state = [int(reg_state["PC"], 2)] 
+        for j in range(32):
+            reg_key = f"x{j}"
+            r_state.append(int(reg_state[reg_key], 2))  
+        r_formattrace.append(r_state)
+        
+        pc = next_pc
+        if pc == -1:
+            halt_encountered = True
+            pc = int(instruction_trace[-1][2]["PC"], 2)
+        
+        sub = next_pc - pc1
+        if sub > 4: i += sub // 4
+        elif sub < 0: i -= abs(sub) // 4
+        else: i += 1
+    
+    for addr, val in memory.items():
+        formatted_addr = "0x" + hex(addr)[2:].zfill(8)  
+        if formatted_addr in memory_keys:
+            memory_trace[formatted_addr] = val
+    
+    with open(output_file, 'w') as f:
+        for _, inst, regs in instruction_trace:
+            f.write(f"0b{regs['PC']} ")
+            for reg, val in list(regs.items())[:-1]:
+                f.write(f"0b{val} ")
+            f.write('\n')
+        
+        for addr, val in sorted(memory_trace.items()):
+            if addr in memory_keys:
+                f.write(f"{addr}:0b{_32bit_twos_complement(val)}\n")
+    
+    # Write trace to output_r file (new format)
+    with open(output_r_file, 'w') as f:
+        for reg_vals in r_formattrace:
+            line = " ".join(str(val) for val in reg_vals)
+            f.write(f"{line}\n")
+        
+        for addr, val in sorted(memory_trace.items()):
+            if addr in memory_keys:
+                f.write(f"{addr}:{val}\n")
+
+if __name__ == "__main__":
+    if len(sys.argv)<3 or len(sys.argv)>4:
+        print("Usage: python3 Simulator.py input_machine_code_path output_trace_path [output_r_path]")
+        sys.exit(1)
+    
+    input_file=sys.argv[1]
+    output_file=sys.argv[2]
+    
+    if not input_file.endswith('.txt') or not output_file.endswith('.txt'):
+        print("Error: Both input and output files must have .txt extension")
+        sys.exit(1)
+    
+    output_r_file="output_r.txt"
+    if len(sys.argv)==4:
+        output_r_file=sys.argv[3]
+        if not output_r_file.endswith('.txt'):
+            print("Error: Output_r file must have .txt extension")
+            sys.exit(1)
+    
+    run_simulator(input_file, output_file, output_r_file)
